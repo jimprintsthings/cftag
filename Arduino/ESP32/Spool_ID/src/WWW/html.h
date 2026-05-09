@@ -471,7 +471,7 @@ function queueExistingSpool() {
   const spoolId = document.getElementById('spool-select').value;
   if (!spoolId) { showStatus('link-status','Select a spool first','err'); return; }
   const vendorId   = document.getElementById('link-vendor-id').value.padEnd(4,'0').substring(0,4).toUpperCase();
-  const filamentId = document.getElementById('link-filament-id').value.padEnd(6,'0').substring(0,6).toUpperCase();
+  const filamentId = document.getElementById('link-filament-id').value.padStart(6,'0').substring(0,6).toUpperCase();
   const colorHex   = document.getElementById('link-color').value.replace('#','');
   const weightG    = document.getElementById('link-weight').value;
   const params = new URLSearchParams({spoolId, vendorId, filamentId, colorHex, weightG});
@@ -489,7 +489,7 @@ function createAndQueueSpool() {
   const colorHex = document.getElementById('new-color').value.replace('#','');
   const weightG  = document.getElementById('new-weight').value;
   const vendorId = document.getElementById('new-vendor-id').value.padEnd(4,'0').substring(0,4).toUpperCase();
-  const filamentId=document.getElementById('new-filament-id').value.padEnd(6,'0').substring(0,6).toUpperCase();
+  const filamentId=document.getElementById('new-filament-id').value.padStart(6,'0').substring(0,6).toUpperCase();
   if (!vendor||!material) { showStatus('create-status','Fill in vendor and material','err'); return; }
   document.getElementById('btn-create').disabled = true;
   document.getElementById('create-spinner').style.display = 'inline-block';
