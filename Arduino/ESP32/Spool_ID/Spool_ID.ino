@@ -189,6 +189,7 @@ String readTag()
   byte sz = sizeof(buf);
 
   // Auth sector 1 (block 7 is trailer)
+  delay(20); 
   status = (MFRC522::StatusCode)mfrc522.PCD_Authenticate(
     MFRC522::PICC_CMD_MF_AUTH_KEY_A, 7, &authKey, &mfrc522.uid);
   if (status != MFRC522::STATUS_OK) {
@@ -224,7 +225,6 @@ String readTag()
 
   return s1 + s2;  // 96-char hex (raw bytes, sector1 still encrypted)
 }
-
 // ── Tag write ─────────────────────────────────────────────────────────────────
 // Writes spoolData to sector 1 (encrypted) and sector 2 (plaintext).
 // On first write, also rekeys the sector 1 trailer.
@@ -232,10 +232,10 @@ bool writeTag()
 {
   lastWriteError = "";
 
-  // Pad spoolData to 96 chars
+  // Pad spoolData to 96 hex chars (48 bytes)
   String full = spoolData;
-  while (full.length() < 96) full += ' ';
-  full = full.substring(0, 96);
+  while (full.length() < 48) full += ' ';
+  full = full.substring(0, 48);
 
 #ifdef USE_PN532
 
@@ -248,14 +248,24 @@ bool writeTag()
 
   // Write sector 1 (blocks 4-6), encrypted
   for (int blockIdx = 0; blockIdx < 3; blockIdx++) {
-    byte plain[16], cipher[16];
-    full.substring(blockIdx * 16, blockIdx * 16 + 16).getBytes(plain, 17);
-    aes.encrypt(1, plain, cipher);
-    if (!nfc.mifareclassic_WriteDataBlock(4 + blockIdx, cipher)) {
-      lastWriteError = String("S1 block ") + (4 + blockIdx) + " write failed";
-      return false;
-    }
+  byte plain[16], cipher[16];
+
+  // Always start clean
+  memset(plain, 0, 16);
+
+String chunk = full.substring(
+  blockIdx * 16,
+  blockIdx * 16 + 16
+);
+//hexStringToBytes(chunk, plain, 16);
+
+  aes.encrypt(1, plain, cipher);
+
+  if (!nfc.mifareclassic_WriteDataBlock(4 + blockIdx, cipher)) {
+    lastWriteError = String("S1 block ") + (4 + blockIdx) + " write failed";
+    return false;
   }
+}
 
   // On first write: rekey sector 1 trailer (block 7) with derived key
   if (!encrypted) {
@@ -282,7 +292,14 @@ bool writeTag()
   // Write sector 2 (blocks 8-10), plaintext
   for (int blockIdx = 0; blockIdx < 3; blockIdx++) {
     byte plain[16];
-    full.substring(48 + blockIdx * 16, 48 + blockIdx * 16 + 16).getBytes(plain, 17);
+   memset(plain, 0, 16);
+
+String chunk = full.substring(
+    blockIdx * 16,
+    blockIdx * 16 + 16
+);
+
+aes.encrypt(1, plain, cipher);
     if (!nfc.mifareclassic_WriteDataBlock(8 + blockIdx, plain)) {
       lastWriteError = String("S2 block ") + (8 + blockIdx) + " write failed";
       return false;
@@ -294,20 +311,12 @@ bool writeTag()
   MFRC522::StatusCode status;
   MFRC522::MIFARE_Key &authKey = encrypted ? ekey : key;
 
-  // Authenticate sector 1
-  status = (MFRC522::StatusCode)mfrc522.PCD_Authenticate(
-    MFRC522::PICC_CMD_MF_AUTH_KEY_A, 7, &authKey, &mfrc522.uid);
-  if (status != MFRC522::STATUS_OK) {
-    lastWriteError = String("S1 auth failed (") + String(mfrc522.GetStatusCodeName(status)) + "), encrypted=" + (encrypted ? "true" : "false");
-    Serial.printf("[write] %s\n", lastWriteError.c_str());
-    return false;
-  }
-  Serial.println("[write] S1 auth OK");
-
   // Write sector 1 (blocks 4-6), encrypted
   for (int blockIdx = 0; blockIdx < 3; blockIdx++) {
-    byte plain[16], cipher[16];
-    full.substring(blockIdx * 16, blockIdx * 16 + 16).getBytes(plain, 17);
+    byte plain[17], cipher[16]; 
+    memset(plain, 0, 17);
+    String chunk = full.substring(blockIdx * 16, blockIdx * 16 + 16);
+    chunk.getBytes(plain, 17);
     aes.encrypt(1, plain, cipher);
     status = (MFRC522::StatusCode)mfrc522.MIFARE_Write(4 + blockIdx, cipher, 16);
     if (status != MFRC522::STATUS_OK) {
@@ -356,8 +365,11 @@ bool writeTag()
 
   // Write sector 2 (blocks 8-10), plaintext
   for (int blockIdx = 0; blockIdx < 3; blockIdx++) {
-    byte plain[16];
-    full.substring(48 + blockIdx * 16, 48 + blockIdx * 16 + 16).getBytes(plain, 17);
+   byte plain[17];
+    memset(plain, 0, 17);
+    String chunk = full.substring(48 + blockIdx * 16, 48 + blockIdx * 16 + 16);
+    chunk.getBytes(plain, 17);
+   
     status = (MFRC522::StatusCode)mfrc522.MIFARE_Write(8 + blockIdx, plain, 16);
     if (status != MFRC522::STATUS_OK) {
       lastWriteError = String("S2 block ") + (8 + blockIdx) + " write failed (" + String(mfrc522.GetStatusCodeName(status)) + ")";
@@ -366,7 +378,6 @@ bool writeTag()
     }
     Serial.printf("[write] S2 block %d OK\n", 8 + blockIdx);
   }
-
 #endif
 
   return true;
@@ -498,13 +509,25 @@ void handleQueueSpool()
   tagWriteCount  = 0;
 
   String vendorId   = webServer.hasArg("vendorId")   ? webServer.arg("vendorId")   : "0276";
-  String filamentId = webServer.hasArg("filamentId")  ? webServer.arg("filamentId") : "101001";
+ String filamentId = "101001";  // default
+if (webServer.hasArg("filamentId")) {
+  String incoming = webServer.arg("filamentId");
+  if (incoming.length() == 6)
+    incoming = incoming.substring(1);
+  if (incoming.length() == 5)
+    filamentId = "1" + incoming;
+}
+
+
   String colorHex   = webServer.hasArg("colorHex")    ? webServer.arg("colorHex")   : "FFFFFF";
   int    weightG    = webServer.hasArg("weightG")      ? webServer.arg("weightG").toInt() : 1000;
 
   colorHex.replace("#", "");
+
   buildSpoolData(vendorId, filamentId, colorHex, weightG, pendingSpoolId);
   pendingWrite = true;
+
+
 
   webServer.send(200, "application/json", "{\"ok\":true,\"spoolId\":" + String(pendingSpoolId) + "}");
 }
@@ -534,9 +557,10 @@ void handleCreateSpool()
   pendingWrite   = true;
   tagWriteCount  = 0;
   String vendorId   = "0276";  // generic; user can override via vendorId arg
-  String filamentId = "1" + material.substring(0, 5);
+  String filamentId = "101001";
   if (webServer.hasArg("vendorId"))   vendorId   = webServer.arg("vendorId");
   if (webServer.hasArg("filamentId")) filamentId = webServer.arg("filamentId");
+  
   buildSpoolData(vendorId, filamentId, colorHex, weightG, id);
 
   webServer.send(200, "application/json", "{\"ok\":true,\"spoolId\":" + String(id) + "}");
@@ -563,7 +587,12 @@ void handleSpoolData()
   }
   String filamentLen = getFilamentLength(webServer.arg("materialWeight").toInt());
   String serialNum  = String(random(100000, 999999));
-  spoolData = "AB124" + vendorId + "A2" + filamentId + "0" + color + filamentLen + serialNum + "000000" + "00000000";
+  spoolData = "AB124" + vendorId + "A2" + filamentId +
+            "0" + color +
+            filamentLen +
+            serialNum +
+            "000000" +
+            "00000000";
   pendingSpoolId = 0; pendingWrite = true; tagWriteCount = 0;
   File f = LittleFS.open("/spool.ini", "w"); if (f) { f.print(spoolData); f.close(); }
   webServer.send(200, "text/plain", "OK");
@@ -906,13 +935,13 @@ void loop()
     encrypted = true;
   }
   Serial.printf("[RFID] auth OK, encrypted=%s\n", encrypted ? "true" : "false");
-  mfrc522.PCD_StopCrypto1();
+ // mfrc522.PCD_StopCrypto1();
 
 #endif
 
   // Write if a spool has been queued via the web UI, or a manual write is pending
   if (pendingSpoolId > 0 || pendingWrite) {
-    Serial.printf("[RFID] writing tag — spoolId=%d pendingWrite=%s data=%s\n",
+    Serial.printf("[RFID] writing tag - spoolId=%d pendingWrite=%s data=%s\n",
       pendingSpoolId, pendingWrite ? "true" : "false", spoolData.c_str());
     bool ok = writeTag();
     if (ok) {
